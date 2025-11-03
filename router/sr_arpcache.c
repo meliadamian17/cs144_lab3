@@ -16,8 +16,20 @@
   checking whether we should resend an request or destroy the arp request.
   See the comments in the header file for an idea of what it should look like.
 */
+
+/* Forward declaration of handle_arpreq from sr_router.c */
+void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
+
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
+    /* Iterate through all ARP requests */
+    struct sr_arpreq* req = sr->cache.requests;
+    struct sr_arpreq* next;
+    
+    while (req) {
+        next = req->next;
+        handle_arpreq(sr, req);
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
