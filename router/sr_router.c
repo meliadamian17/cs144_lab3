@@ -90,7 +90,6 @@ void sr_send_arp_request(struct sr_instance *sr, uint32_t tip, struct sr_if *ifa
     memset(arp_hdr->ar_tha, 0x00, ETHER_ADDR_LEN); /* Target MAC unknown */
     arp_hdr->ar_tip = tip;
 
-    /* Send the packet */
     sr_send_packet(sr, packet, len, iface->name);
     free(packet);
 }
@@ -102,7 +101,6 @@ void sr_send_icmp_t3(struct sr_instance *sr, uint8_t *packet,
     sr_ethernet_hdr_t *orig_eth_hdr = (sr_ethernet_hdr_t *)packet;
     sr_ip_hdr_t *orig_ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
 
-    /* Allocate new packet */
     unsigned int reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t3_hdr_t);
     uint8_t *reply = (uint8_t *)malloc(reply_len);
 
@@ -135,13 +133,10 @@ void sr_send_icmp_t3(struct sr_instance *sr, uint8_t *packet,
     icmp_hdr->next_mtu = 0;
     icmp_hdr->icmp_sum = 0;
 
-    /* Copy original IP header + 8 bytes of payload */
     memcpy(icmp_hdr->data, orig_ip_hdr, ICMP_DATA_SIZE);
 
-    /* Calculate ICMP checksum */
     icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t3_hdr_t));
 
-    /* Send the packet */
     sr_send_packet(sr, reply, reply_len, iface->name);
     free(reply);
 }
@@ -158,7 +153,6 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req)
 {
     time_t now = time(NULL);
 
-    /* Check if we need to send/resend ARP request */
     if (difftime(now, req->sent) >= 1.0)
     {
         if (req->times_sent >= 5)
@@ -167,26 +161,21 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req)
             struct sr_packet *pkt = req->packets;
             while (pkt)
             {
-                /* Get the outgoing interface for the ICMP reply */
                 sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(pkt->buf);
                 sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt->buf + sizeof(sr_ethernet_hdr_t));
 
-                /* Find interface to send ICMP reply back */
                 struct sr_if *iface = sr_get_interface(sr, pkt->iface);
                 if (iface)
                 {
-                    /* Send ICMP type 3, code 1 (Host Unreachable) */
                     sr_send_icmp_t3(sr, pkt->buf, pkt->len, 3, 1, iface);
                 }
                 pkt = pkt->next;
             }
-            /* Destroy the ARP request */
             sr_arpreq_destroy(&(sr->cache), req);
         }
         else
         {
             /* Send ARP request */
-            /* Need to find the outgoing interface for this request */
             struct sr_packet *pkt = req->packets;
             if (pkt)
             {
@@ -197,7 +186,6 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req)
                 }
             }
 
-            /* Update request metadata */
             req->sent = now;
             req->times_sent++;
         }
@@ -449,7 +437,6 @@ void sr_handlepacket(struct sr_instance *sr,
 
     printf("*** -> Received packet of length %d \n", len);
 
-    /* fill in code here */
 
     struct sr_if *iface_info = iface_from_list(sr, interface);
 

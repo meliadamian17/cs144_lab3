@@ -17,11 +17,9 @@
   See the comments in the header file for an idea of what it should look like.
 */
 
-/* Forward declaration of handle_arpreq from sr_router.c */
 void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
 
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Iterate through all ARP requests */
     struct sr_arpreq* req = sr->cache.requests;
     struct sr_arpreq* next;
     
