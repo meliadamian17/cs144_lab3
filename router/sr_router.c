@@ -161,8 +161,6 @@ void handle_arpreq(struct sr_instance *sr, struct sr_arpreq *req)
             struct sr_packet *pkt = req->packets;
             while (pkt)
             {
-                sr_ethernet_hdr_t *eth_hdr = (sr_ethernet_hdr_t *)(pkt->buf);
-                sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt->buf + sizeof(sr_ethernet_hdr_t));
 
                 struct sr_if *iface = sr_get_interface(sr, pkt->iface);
                 if (iface)
@@ -204,26 +202,39 @@ struct sr_if *iface_from_list(struct sr_instance *sr, char *interface)
     return list;
 }
 
-struct sr_rt *routing_match(struct sr_instance *sr,
-                            uint32_t dst)
+struct sr_rt *longest_prefix_match(struct sr_instance *sr,
+                                   uint32_t dst)
 {
     struct sr_rt *entry = sr->routing_table;
+    struct sr_rt *longest_match = NULL;
+    uint32_t longest_mask = 0;
 
-    while (entry->dest.s_addr != dst)
+    while (entry)
     {
+        uint32_t masked_dst = dst & entry->mask.s_addr;
+        uint32_t masked_entry = entry->dest.s_addr & entry->mask.s_addr;
+
+        /* check if same masked ip but more specific ip */
+        if (masked_dst == masked_entry && entry->mask.s_addr > longest_mask)
+        {
+            longest_mask = entry->mask.s_addr;
+            longest_match = entry;
+        }
+
         entry = entry->next;
-        if (entry == NULL)
-            return NULL;
     }
 
-    return entry;
+    return longest_match;
 }
 
-void swap_eth_addr(uint8_t *packet, struct sr_if *iface_info)
+void swap_eth_addr(uint8_t *packet)
 {
     sr_ethernet_hdr_t *ehdr = (sr_ethernet_hdr_t *)packet;
+    uint8_t tmp_address[ETHER_ADDR_LEN];
+
+    memcpy(tmp_address, ehdr->ether_dhost, ETHER_ADDR_LEN);
     memcpy(ehdr->ether_dhost, ehdr->ether_shost, ETHER_ADDR_LEN);
-    memcpy(ehdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+    memcpy(ehdr->ether_shost, tmp_address, ETHER_ADDR_LEN);
 }
 
 void reply_to_arp(struct sr_instance *sr,
@@ -232,7 +243,7 @@ void reply_to_arp(struct sr_instance *sr,
                   char *interface,
                   struct sr_if *iface_info)
 {
-    swap_eth_addr(packet, iface_info);
+    swap_eth_addr(packet);
     sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
     arp_hdr->ar_op = htons(arp_op_reply);
     memcpy(arp_hdr->ar_tha, arp_hdr->ar_sha, ETHER_ADDR_LEN);
@@ -240,7 +251,6 @@ void reply_to_arp(struct sr_instance *sr,
     memcpy(arp_hdr->ar_sha, iface_info->addr, ETHER_ADDR_LEN);
     arp_hdr->ar_sip = iface_info->ip;
 
-    printf("sending back");
     sr_send_packet(sr, packet, len, interface);
 }
 
@@ -252,7 +262,7 @@ void icmp_echo_reply(struct sr_instance *sr,
 {
     uint8_t *hdr = packet;
 
-    swap_eth_addr(hdr, iface_info);
+    swap_eth_addr(hdr);
 
     hdr += sizeof(sr_ethernet_hdr_t);
 
@@ -293,7 +303,7 @@ void generate_imcp_error(struct sr_instance *sr,
 
     memcpy(hdr, packet, sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
-    swap_eth_addr(hdr, iface_info);
+    swap_eth_addr(hdr);
 
     hdr += sizeof(sr_ethernet_hdr_t);
 
@@ -332,8 +342,7 @@ void valid_ip_not_for_me(struct sr_instance *sr,
 
     sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
 
-    struct sr_rt *match = routing_match(sr, ip_hdr->ip_dst);
-    struct sr_if *out_iface = sr_get_interface(sr, match->interface);
+    struct sr_rt *match = longest_prefix_match(sr, ip_hdr->ip_dst);
 
     if (match == NULL)
     {
@@ -341,12 +350,18 @@ void valid_ip_not_for_me(struct sr_instance *sr,
     }
     else
     {
+        struct sr_if *out_iface = sr_get_interface(sr, match->interface);
+
         struct sr_arpentry *entry = sr_arpcache_lookup(&(sr->cache), match->dest.s_addr);
 
         if (entry != NULL)
         {
             memcpy(eth_hdr->ether_dhost, entry->mac, ETHER_ADDR_LEN);
             memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
+
+            ip_hdr->ip_ttl--;
+            ip_hdr->ip_sum = 0;
+            ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
 
             sr_send_packet(sr, packet, len, out_iface->name);
 
@@ -361,6 +376,22 @@ void valid_ip_not_for_me(struct sr_instance *sr,
     }
 }
 
+struct sr_if *router_interface_check(struct sr_instance *sr, uint32_t dst)
+{
+    struct sr_if *iface_entry = sr->if_list;
+
+    while (iface_entry)
+    {
+        if (iface_entry->ip == dst)
+        {
+            return iface_entry;
+        }
+        iface_entry = iface_entry->next;
+    }
+
+    return NULL;
+}
+
 void ip_handler(struct sr_instance *sr,
                 uint8_t *packet,
                 unsigned int len,
@@ -369,15 +400,28 @@ void ip_handler(struct sr_instance *sr,
 {
     sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
 
-    if (ip_hdr->ip_dst == iface_info->ip)
+    uint16_t received_sum = ip_hdr->ip_sum;
+    ip_hdr->ip_sum = 0;
+    uint16_t checksum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+    ip_hdr->ip_sum = received_sum;
+
+    /* drop the packet if checksum is wrong */
+    if (received_sum != checksum)
+    {
+        return;
+    }
+
+    struct sr_if *router_iface = router_interface_check(sr, ip_hdr->ip_dst);
+
+    if (router_iface)
     {
         if (ip_hdr->ip_p == 1)
         {
-            icmp_echo_reply(sr, packet, len, interface, iface_info);
+            icmp_echo_reply(sr, packet, len, interface, router_iface);
         }
-        else if (ip_hdr->ip_p == 16 || ip_hdr->ip_p == 17)
+        else if (ip_hdr->ip_p == 6 || ip_hdr->ip_p == 17)
         {
-            generate_imcp_error(sr, packet, len, interface, iface_info, 3, 3);
+            generate_imcp_error(sr, packet, len, interface, router_iface, 3, 3);
         }
         else
         {
@@ -416,6 +460,13 @@ void arp_reply_handler(struct sr_instance *sr,
 
             struct sr_if *iface = sr_get_interface(sr, pkt->iface);
             memcpy(eth_hdr->ether_shost, iface->addr, ETHER_ADDR_LEN);
+
+            sr_ip_hdr_t *ip_hdr = (sr_ip_hdr_t *)(pkt->buf + sizeof(sr_ethernet_hdr_t));
+
+            ip_hdr->ip_ttl--;
+            ip_hdr->ip_sum = 0;
+            ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+
             sr_send_packet(sr, pkt->buf, pkt->len, iface->name);
 
             pkt = pkt->next;
@@ -437,12 +488,10 @@ void sr_handlepacket(struct sr_instance *sr,
 
     printf("*** -> Received packet of length %d \n", len);
 
-
     struct sr_if *iface_info = iface_from_list(sr, interface);
 
     if (ethertype(packet) == ethertype_arp)
     {
-        printf("arp recieved\n");
         sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
         if (ntohs(arp_hdr->ar_op) == arp_op_request)
         {
