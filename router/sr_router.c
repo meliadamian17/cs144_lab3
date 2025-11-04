@@ -243,13 +243,19 @@ void reply_to_arp(struct sr_instance *sr,
                   char *interface,
                   struct sr_if *iface_info)
 {
-    swap_eth_addr(packet);
+    sr_ethernet_hdr_t *ehdr = (sr_ethernet_hdr_t *)packet;
+
+    memcpy(ehdr->ether_dhost, ehdr->ether_shost, ETHER_ADDR_LEN);
+    memcpy(ehdr->ether_shost, iface_info->addr, ETHER_ADDR_LEN);
+
     sr_arp_hdr_t *arp_hdr = (sr_arp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
     arp_hdr->ar_op = htons(arp_op_reply);
     memcpy(arp_hdr->ar_tha, arp_hdr->ar_sha, ETHER_ADDR_LEN);
     arp_hdr->ar_tip = arp_hdr->ar_sip;
     memcpy(arp_hdr->ar_sha, iface_info->addr, ETHER_ADDR_LEN);
     arp_hdr->ar_sip = iface_info->ip;
+
+    print_hdrs(packet, len);
 
     sr_send_packet(sr, packet, len, interface);
 }

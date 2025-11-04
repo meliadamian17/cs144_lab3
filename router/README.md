@@ -131,11 +131,9 @@ This section documents the functions that implement the required and missing fun
 **Purpose**: Finds a routing table entry matching a destination IP address.
 
 **Implementation Details**:
-- Iterates through routing table linked list
-- Compares destination IP with each entry's destination
-- Returns matching entry or NULL if no match found
-
-**Note**: This implementation performs exact match rather than longest prefix match. For production use, longest prefix match should be implemented.
+- Iterates through routing table linked list to find the longest prefix
+- Compares destination IP with longest till now
+- Returns longest prefix entry or NULL if no match found
 
 **Required Functionality**: Enables IP forwarding by finding the appropriate routing table entry for a destination.
 
@@ -146,7 +144,17 @@ This section documents the functions that implement the required and missing fun
 - Copies source MAC to destination MAC
 - Sets source MAC to router's interface MAC address
 
-**Required Functionality**: Utility function for generating reply packets (ARP replies, ICMP echo replies).
+**Required Functionality**: Utility function for generating reply packets (ICMP echo replies/errors).
+
+#### `router_interface_check` - sr_router.c
+**Purpose**: Determines whether an incoming IP packet is addressed to one of the router’s own interfaces.
+
+**Implementation Details**:
+- Iterates over the linked list of interfaces
+- Compares to find if any of the interface's address was the destination address
+- Returns the matched interface or NULL if packet was not destined to the router
+
+**Required Functionality**: Enables router to check if IP packet belongs to it
 
 ---
 
@@ -212,6 +220,8 @@ This section documents the functions that implement the required and missing fun
 
 **Required Functionality**: Generates ICMP error messages for various error conditions (Net Unreachable, Port Unreachable, Time Exceeded).
 
+**Note**: This function and `sr_send_icmp_t3()` do the same thing but were implemented independently with slightly different API but they could be combined into one.
+
 ---
 
 ### IP Packet Forwarding Functions
@@ -264,3 +274,241 @@ This section documents the functions that implement the required and missing fun
   - **Other types**: Discards packet
 
 **Required Functionality**: Implements the main packet processing logic, routing packets to appropriate handlers based on protocol type.
+
+## Test Cases
+
+Follow these instructions to get started : 
+
+1. Start VM
+2. cd cs144\_lab3
+3. ./config.sh
+4. ./run_pox.sh
+5. In a different terminal, ./run_mininet.sh
+6. In another terminal, cd router ; make ; ./sr
+
+Now we can start sending packets, the following test cases serve as examples :
+
+### Router Functionality
+
+#### Test 1: Client connects to Router
+
+**Command:** `client ping -c 3 10.0.1.1`
+
+**Expectation:**
+The router should reply to ICMP echo requests directed at its eth3 interface, confirming local interface reachability and proper ARP handling.
+
+**Output:**
+
+```
+PING 10.0.1.1 (10.0.1.1) 56(84) bytes of data.
+64 bytes from 10.0.1.1: icmp_seq=1 ttl=64 time=67.9 ms
+64 bytes from 10.0.1.1: icmp_seq=2 ttl=64 time=41.3 ms
+64 bytes from 10.0.1.1: icmp_seq=3 ttl=64 time=77.9 ms
+
+--- 10.0.1.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2004ms
+rtt min/avg/max/mdev = 41.300/62.369/77.884/15.443 ms
+```
+
+#### Test 2: Client pings Server1
+
+**Command:** `client ping -c 3 server1`
+
+**Expectation:**
+ICMP echo packets from the client should be forwarded through the router to server1, which should return echo replies routed back correctly through the same interface.
+
+**Output:**
+
+```
+PING 192.168.2.2 (192.168.2.2) 56(84) bytes of data.
+64 bytes from 192.168.2.2: icmp_seq=1 ttl=63 time=138 ms
+64 bytes from 192.168.2.2: icmp_seq=2 ttl=63 time=119 ms
+64 bytes from 192.168.2.2: icmp_seq=3 ttl=63 time=80.0 ms
+
+--- 192.168.2.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2002ms
+rtt min/avg/max/mdev = 79.958/112.174/137.756/24.057 ms
+```
+
+#### Test 3: Client pings Router’s other interface
+
+**Command:** `client ping -c 3 172.64.3.1`
+
+**Expectation:**
+The router should directly respond to pings targeting its eth2 interface IP, confirming the interface is reachable and operational.
+
+**Output:**
+
+```
+PING 172.64.3.1 (172.64.3.1) 56(84) bytes of data.
+64 bytes from 172.64.3.1: icmp_seq=1 ttl=64 time=57.2 ms
+64 bytes from 172.64.3.1: icmp_seq=2 ttl=64 time=58.5 ms
+64 bytes from 172.64.3.1: icmp_seq=3 ttl=64 time=74.7 ms
+
+--- 172.64.3.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2010ms
+rtt min/avg/max/mdev = 57.226/63.454/74.662/7.941 ms
+```
+
+#### Test 4: Client traceroutes Router
+
+**Command:** `client traceroute -n 10.0.1.1`
+
+**Expectation:**
+Traceroute should show the router as a single hop away, indicating successful ICMP Time Exceeded handling for packets with low TTL values.
+
+**Output:**
+
+```
+traceroute to 10.0.1.1 (10.0.1.1), 30 hops max, 60 byte packets
+ 1  10.0.1.1  64.286 ms  73.767 ms  111.505 ms
+```
+
+#### Test 5: Client traceroutes Server2
+
+**Command:** `client traceroute -n 172.64.3.10`
+
+**Expectation:**
+The router should decrement TTL values and generate Time Exceeded messages as packets traverse toward server2, confirming correct hop-by-hop processing.
+
+**Output:**
+
+```
+traceroute to 172.64.3.10 (172.64.3.10), 30 hops max, 60 byte packets
+ 1  10.0.1.1  40.139 ms  66.200 ms  116.766 ms
+ 2  * * *
+ 3  * * *
+ 4  * * *
+ 5  * 172.64.3.10  408.595 ms  416.858 ms
+```
+
+#### Test 6: Server2 traceroutes Server1
+
+**Command:** `server2 traceroute -n 192.168.2.2`
+
+**Expectation:**
+Traceroute packets from server2 should be routed through the router to reach server1, verifying inter-network communication between different router interfaces.
+
+**Output:**
+
+```
+nohup: appending output to 'nohup.out'
+traceroute to 192.168.2.2 (192.168.2.2), 30 hops max, 60 byte packets
+ 1  172.64.3.1  34.490 ms  93.180 ms  85.198 ms
+ 2  * * *
+ 3  * * *
+ 4  * * *
+ 5  * 192.168.2.2  388.670 ms  394.452 ms
+```
+
+#### Test 7: Client downloads file from Server1
+
+**Command:** `client wget http://192.168.2.2`
+
+**Expectation:**
+The router should properly route TCP traffic for the HTTP request and response, enabling successful file retrieval from server1.
+
+**Output:**
+
+```
+--2025-11-03 16:05:29--  http://192.168.2.2/
+Connecting to 192.168.2.2:80... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 161 [text/html]
+Saving to: ‘index.html.7’
+
+index.html.7          0%[                    ]       0  --index.html.7        100%[===================>]     161  --.-KB/s    in 0s      
+
+2025-11-03 16:05:29 (953 KB/s) - ‘index.html.7’ saved [161/161]
+```
+
+#### Test 8: Client pings unavailable host
+
+**Command:** `client ping -c 3 192.168.2.5`
+
+**Expectation:**
+Since a subnet containing the destination host does not exist, the router should respond with ICMP Destination Net Unreachable.
+
+**Output:**
+
+```
+PING 192.168.2.5 (192.168.2.5) 56(84) bytes of data.
+From 10.0.1.1 icmp_seq=1 Destination Net Unreachable
+From 10.0.1.1 icmp_seq=2 Destination Net Unreachable
+From 10.0.1.1 icmp_seq=3 Destination Net Unreachable
+
+--- 192.168.2.5 ping statistics ---
+3 packets transmitted, 0 received, +3 errors, 100% packet loss, time 2003ms
+```
+
+### ARP Cache Tests
+
+#### Test 1: Ping Server2 two times in a row
+
+**Command 1:** `client ping -c 3 server2`
+
+**Command 2:** `client ping -c 3 server2`
+
+**Instructions:** Execute Command 2 right after Command 1 finishes
+
+**Expectation:**
+Since we are caching the ARP reply we expect the second ping to have a shorter RTT.
+
+**Output for Command 1:**
+```
+PING 192.168.2.2 (192.168.2.2) 56(84) bytes of data.
+64 bytes from 192.168.2.2: icmp_seq=1 ttl=63 time=151 ms
+64 bytes from 192.168.2.2: icmp_seq=2 ttl=63 time=45.2 ms
+64 bytes from 192.168.2.2: icmp_seq=3 ttl=63 time=152 ms
+
+--- 192.168.2.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2006ms
+rtt min/avg/max/mdev = 45.241/116.070/151.997/50.085 ms
+```
+
+**Output for Command 2:**
+```
+PING 192.168.2.2 (192.168.2.2) 56(84) bytes of data.
+64 bytes from 192.168.2.2: icmp_seq=1 ttl=63 time=60.0 ms
+64 bytes from 192.168.2.2: icmp_seq=2 ttl=63 time=54.5 ms
+64 bytes from 192.168.2.2: icmp_seq=3 ttl=63 time=132 ms
+
+--- 192.168.2.2 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2004ms
+rtt min/avg/max/mdev = 54.469/82.096/131.862/35.261 ms
+```
+
+Clearly the avg for the second set of pings (82ms) < avg for the first set of pings (116ms).
+
+#### Test 2 : Traceroute Server1 two times in a row
+
+**Command 1:** `client traceroute -c 3 server2`
+
+**Command 2:** `client traceroute -c 3 server2`
+
+**Instructions:** Execute Command 2 right after Command 1 finishes
+
+**Expectation:**
+Since we are caching the ARP reply we expect the second traceroute to resolved much faster.
+
+**Output for Command 1:**
+
+```
+traceroute to 192.168.2.2 (192.168.2.2), 30 hops max, 60 byte packets
+ 1  10.0.1.1 (10.0.1.1)  41.975 ms  77.099 ms  85.511 ms
+ 2  * * *
+ 3  * * *
+ 4  * * *
+ 5  * 192.168.2.2 (192.168.2.2)  397.205 ms  402.764 ms
+```
+
+**Output for Command 2:**
+```
+traceroute to 192.168.2.2 (192.168.2.2), 30 hops max, 60 byte packets
+ 1  10.0.1.1 (10.0.1.1)  30.515 ms *  88.913 ms
+ 2  192.168.2.2 (192.168.2.2)  232.857 ms  266.345 ms  279.143 ms
+```
+
+The second traceroute completes much earlier because of the caching.
+
+
