@@ -255,8 +255,6 @@ void reply_to_arp(struct sr_instance *sr,
     memcpy(arp_hdr->ar_sha, iface_info->addr, ETHER_ADDR_LEN);
     arp_hdr->ar_sip = iface_info->ip;
 
-    print_hdrs(packet, len);
-
     sr_send_packet(sr, packet, len, interface);
 }
 

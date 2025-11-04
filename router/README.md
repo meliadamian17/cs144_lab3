@@ -2,7 +2,7 @@
 
 ## Group Members
 
-### Damian Melia
+### Damian Melia (1008848197)
 #### Contributions
 - Implemented all functionality related to the ARP Cache
 - Functions Implemented:
@@ -11,7 +11,7 @@
     - ``` sr_send_icmp_t3() ``` - sr_router.c
     - ``` handle_arpreq() ``` - sr_router.c  
 
-### Gursimar Singh
+### Gursimar Singh (1009699444)
 #### Contributions
 - Implemented all functionality related to ARP packet handling and helper utilities
 - Functions Implemented:
@@ -21,7 +21,7 @@
     - ``` reply_to_arp() ``` - sr_router.c
     - ``` arp_reply_handler() ``` - sr_router.c
 
-### Prithvi Ajay
+### Prithvi Ajay (1009575407)
 #### Contributions
 - Implemented all functionality related to IP packet handling and ICMP message generation
 - Functions Implemented:
